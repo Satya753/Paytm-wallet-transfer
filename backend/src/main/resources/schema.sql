@@ -1,0 +1,17 @@
+CREATE TABLE IF NOT EXISTS wallets (
+  id UUID PRIMARY KEY,
+  user_id VARCHAR(100) NOT NULL UNIQUE,
+  balance_paise BIGINT NOT NULL DEFAULT 0 CHECK (balance_paise >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS transfers (
+  id UUID PRIMARY KEY,
+  idempotency_key VARCHAR(255) NOT NULL UNIQUE,
+  from_wallet_id UUID NOT NULL REFERENCES wallets(id),
+  to_wallet_id UUID NOT NULL REFERENCES wallets(id),
+  amount_paise BIGINT NOT NULL CHECK (amount_paise > 0),
+  status VARCHAR(20) NOT NULL CHECK (status IN ('PENDING', 'COMPLETED', 'REJECTED')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMPTZ
+);

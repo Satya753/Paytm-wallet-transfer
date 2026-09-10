@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/wallet}
+    username: ${SPRING_DATASOURCE_USERNAME:wallet}
+    password: ${SPRING_DATASOURCE_PASSWORD:wallet}
+  sql:
+    init:
+      mode: always
+server:
+  error:
+    include-message: never
+wallet:
+  tokens: ${WALLET_TOKENS:alice-token:alice,bob-token:bob}
