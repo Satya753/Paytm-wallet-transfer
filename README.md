@@ -25,13 +25,30 @@ Every endpoint needs `Authorization: Bearer <token>`.
 # Create or retrieve the caller's wallet
 curl -X POST localhost:8080/wallets -H 'Authorization: Bearer alice-token'
 
-# Transfer (wallet UUIDs shown as placeholders)
+# Transfer using public UPI-style IDs (for example, `alice@wallet`)
 curl -X POST localhost:8080/transfers \
   -H 'Authorization: Bearer alice-token' -H 'Content-Type: application/json' \
-  -d '{"from":"FROM_UUID","to":"TO_UUID","amount_paise":500,"idempotency_key":"payment-001"}'
+  -d '{"from":"alice@wallet","to":"bob@wallet","amount_paise":500,"idempotency_key":"payment-001"}'
 ```
 
-`POST /wallets` is get-or-create for the authenticated user. Wallet and transfer reads only permit the transfer sender or wallet owner. Transfers lock both wallet rows in a stable order, debit and credit in one SQL transaction, and persist the client idempotency key. Insufficient funds create a `REJECTED` transfer without changing balances.
+Add funds to the authenticated caller's wallet (use a distinct idempotency key for each new credit):
+
+```sh
+curl -X POST localhost:8080/wallets/alice%40wallet/credits \
+  -H 'Authorization: Bearer alice-token' -H 'Content-Type: application/json' \
+  -d '{"amount_paise":1000,"idempotency_key":"initial-funds-001"}'
+```
+
+Read that wallet's full credit and transfer history:
+
+```sh
+curl localhost:8080/wallets/alice%40wallet/transactions \
+  -H 'Authorization: Bearer alice-token'
+```
+
+`POST /wallets` is get-or-create for the authenticated user. Wallet, credit, and history reads only permit the wallet owner. Transfers use an atomic conditional debit and credit in one SQL transaction, and persist the client idempotency key. Insufficient funds create a `REJECTED` transfer without changing balances.
+
+Balance credits and transfers run at PostgreSQL `SERIALIZABLE` isolation. The service retries transient serialization or deadlock conflicts up to four times; if the wallet remains busy it returns `503`, and callers should retry with the **same** idempotency key.
 
 ## Concurrent wallet check
 

@@ -23,36 +23,56 @@ public class WalletController {
   }
 
   @GetMapping("/wallets/{id}")
-  public WalletResponse get(@PathVariable UUID id, HttpServletRequest request) {
+  public WalletResponse get(@PathVariable String id, HttpServletRequest request) {
     return WalletResponse.from(service.getWallet(id, user(request)));
+  }
+
+  @PostMapping("/wallets/{id}/credits")
+  @ResponseStatus(HttpStatus.CREATED)
+  public CreditResponse credit(@PathVariable String id, @RequestBody JsonNode body, HttpServletRequest request) {
+    long amount = amountPaise(body);
+    return CreditResponse.from(service.credit(id, amount, body.path("idempotency_key").asText(null), user(request)), service);
+  }
+
+  @GetMapping("/wallets/{id}/transactions")
+  public java.util.List<TransactionResponse> history(@PathVariable String id, HttpServletRequest request) {
+    return service.history(id, user(request)).stream().map(TransactionResponse::from).toList();
   }
 
   @PostMapping("/transfers")
   @ResponseStatus(HttpStatus.CREATED)
   public TransferResponse send(@RequestBody JsonNode body, HttpServletRequest request) {
-    if (body == null || !body.hasNonNull("from") || !body.hasNonNull("to") || !body.has("amount_paise"))
+    if (body == null || !body.hasNonNull("from") || !body.hasNonNull("to"))
       throw new ApiException(400, "from, to and amount_paise are required");
-    if (!body.get("amount_paise").isIntegralNumber() || !body.get("amount_paise").canConvertToLong())
-      throw new ApiException(400, "amount_paise must be an integer paise value");
-    try {
-      UUID from = UUID.fromString(body.get("from").asText());
-      UUID to = UUID.fromString(body.get("to").asText());
-      String key = body.path("idempotency_key").asText(null);
-      return TransferResponse.from(service.transfer(from, to, body.get("amount_paise").longValue(), key, user(request)));
-    } catch (IllegalArgumentException e) { throw new ApiException(400, "from and to must be UUIDs"); }
+    String from = body.get("from").asText();
+    String to = body.get("to").asText();
+    if (from.isBlank() || to.isBlank()) throw new ApiException(400, "from and to must be UPI IDs");
+    String key = body.path("idempotency_key").asText(null);
+    return TransferResponse.from(service.transfer(from, to, amountPaise(body), key, user(request)), service);
   }
 
   @GetMapping("/transfers/{id}")
   public TransferResponse getTransfer(@PathVariable UUID id, HttpServletRequest request) {
-    return TransferResponse.from(service.getTransfer(id, user(request)));
+    return TransferResponse.from(service.getTransfer(id, user(request)), service);
   }
 
   private String user(HttpServletRequest request) { return (String) request.getAttribute("userId"); }
-
-  public record WalletResponse(UUID id, long balance_paise) {
-    static WalletResponse from(WalletService.Wallet w) { return new WalletResponse(w.id(), w.balancePaise()); }
+  private long amountPaise(JsonNode body) {
+    if (body == null || !body.has("amount_paise") || !body.get("amount_paise").isIntegralNumber() || !body.get("amount_paise").canConvertToLong())
+      throw new ApiException(400, "amount_paise must be an integer paise value");
+    return body.get("amount_paise").longValue();
   }
-  public record TransferResponse(UUID id, UUID from, UUID to, long amount_paise, String status, Object created_at) {
-    static TransferResponse from(WalletService.Transfer t) { return new TransferResponse(t.id(), t.from(), t.to(), t.amountPaise(), t.status(), t.createdAt()); }
+
+  public record WalletResponse(String upi_id, long balance_paise) {
+    static WalletResponse from(WalletService.Wallet w) { return new WalletResponse(w.upiId(), w.balancePaise()); }
+  }
+  public record TransferResponse(UUID id, String from, String to, long amount_paise, String status, Object created_at) {
+    static TransferResponse from(WalletService.Transfer t, WalletService service) { return new TransferResponse(t.id(), service.upiId(t.from()), service.upiId(t.to()), t.amountPaise(), t.status(), t.createdAt()); }
+  }
+  public record CreditResponse(UUID id, String wallet_upi_id, long amount_paise, String status, Object created_at) {
+    static CreditResponse from(WalletService.Credit c, WalletService service) { return new CreditResponse(c.id(), service.upiId(c.walletId()), c.amountPaise(), c.status(), c.createdAt()); }
+  }
+  public record TransactionResponse(UUID id, String type, String direction, long amount_paise, String status, String counterparty_upi_id, Object created_at) {
+    static TransactionResponse from(WalletService.WalletTransaction t) { return new TransactionResponse(t.id(), t.type(), t.direction(), t.amountPaise(), t.status(), t.counterpartyUpiId(), t.createdAt()); }
   }
 }
