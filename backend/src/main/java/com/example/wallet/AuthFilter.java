@@ -23,6 +23,10 @@ public class AuthFilter extends OncePerRequestFilter {
         .collect(Collectors.toUnmodifiableMap(a -> a[0], a -> a[1]));
   }
 
+  @Override protected boolean shouldNotFilter(HttpServletRequest request) {
+    return request.getRequestURI().equals("/metrics") || request.getRequestURI().equals("/logs");
+  }
+
   @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
       FilterChain chain) throws ServletException, IOException {
     String header = request.getHeader("Authorization");

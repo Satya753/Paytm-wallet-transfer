@@ -2,12 +2,15 @@ import React, {useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './styles.css';
 
+// Vite replaces this value while building.  Locally, the nginx proxy continues
+// to serve the API under /api; the deployed static site uses its public API URL.
+const apiBaseUrl = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 const initial = { token: 'alice-token', from: '', to: '', amount_paise: '', idempotency_key: crypto.randomUUID() };
 function App() {
   const [form, setForm] = useState(initial); const [credit, setCredit] = useState({amount_paise: '', idempotency_key: crypto.randomUUID()}); const [wallet, setWallet] = useState(null); const [result, setResult] = useState(null); const [error, setError] = useState('');
   const set = e => setForm({...form, [e.target.name]: e.target.value});
   async function request(path, options={}) {
-    setError(''); const response = await fetch('/api' + path, { ...options, headers: {'Authorization': `Bearer ${form.token}`, 'Content-Type': 'application/json', ...(options.headers || {})} });
+    setError(''); const response = await fetch(apiBaseUrl + path, { ...options, headers: {'Authorization': `Bearer ${form.token}`, 'Content-Type': 'application/json', ...(options.headers || {})} });
     const json = await response.json(); if (!response.ok) throw new Error(json.error || 'Request failed'); return json;
   }
   async function openWallet() { try { const found = await request('/wallets', {method:'POST'}); setWallet(found); setForm({...form, from: found.upi_id}); } catch(e) {setError(e.message)} }

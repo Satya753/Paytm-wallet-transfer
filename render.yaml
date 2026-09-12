@@ -1,0 +1,36 @@
+services:
+  - type: web
+    runtime: docker
+    name: wallet-transfer-api
+    plan: free
+    rootDir: backend
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    healthCheckPath: /metrics
+    envVars:
+      - key: SPRING_DATASOURCE_URL
+        sync: false
+      - key: SPRING_DATASOURCE_USERNAME
+        sync: false
+      - key: SPRING_DATASOURCE_PASSWORD
+        sync: false
+      - key: WALLET_TOKENS
+        sync: false
+      # Restrict this to your custom frontend domain when you add one.
+      - key: APP_CORS_ALLOWED_ORIGIN_PATTERNS
+        value: http://localhost:*,https://*.onrender.com
+
+  - type: web
+    runtime: static
+    name: wallet-transfer-web
+    rootDir: frontend
+    buildCommand: npm install --no-audit --no-fund && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Use the public API URL shown by Render, e.g. https://wallet-transfer-api.onrender.com
+      - key: VITE_API_URL
+        sync: false

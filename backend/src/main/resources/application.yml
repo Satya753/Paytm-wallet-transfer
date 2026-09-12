@@ -7,7 +7,18 @@ spring:
     init:
       mode: always
 server:
+  address: 0.0.0.0
+  port: ${PORT:8080}
   error:
     include-message: never
 wallet:
   tokens: ${WALLET_TOKENS:alice-token:alice,bob-token:bob}
+management:
+  metrics:
+    distribution:
+      percentiles:
+        http.server.requests: 0.99
+      percentiles-histogram:
+        http.server.requests: true
+    tags:
+      application: wallet-api

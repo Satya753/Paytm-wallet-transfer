@@ -2,35 +2,41 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: wallet
-      POSTGRES_USER: wallet
-      POSTGRES_PASSWORD: wallet
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 10
+
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
   api:
     build: ./backend
+
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/wallet
-      SPRING_DATASOURCE_USERNAME: wallet
-      SPRING_DATASOURCE_PASSWORD: wallet
-      # Format: bearer-token:user-id,another-token:another-user
-      WALLET_TOKENS: alice-token:alice,bob-token:bob
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      WALLET_TOKENS: ${WALLET_TOKENS}
+
     depends_on:
       postgres:
         condition: service_healthy
+
     ports:
       - "8080:8080"
 
   web:
     build: ./frontend
+
     depends_on:
       - api
+
     ports:
       - "3000:80"
 

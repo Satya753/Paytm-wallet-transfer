@@ -3,22 +3,38 @@ package com.example.wallet;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class WalletService {
   private final JdbcTemplate jdbc;
   private final SerializableTransactionExecutor serializable;
+  private final DomainEventLog events;
+  private final Counter transfersCreated;
+  private final Counter transfersDeclinedInsufficientFunds;
+  private final Counter idempotentReplays;
   private final RowMapper<Wallet> walletMapper = (rs, n) -> wallet(rs);
   private final RowMapper<Transfer> transferMapper = (rs, n) -> transfer(rs);
   private final RowMapper<WalletTransaction> historyMapper = (rs, n) -> history(rs);
 
-  public WalletService(JdbcTemplate jdbc, SerializableTransactionExecutor serializable) { this.jdbc = jdbc; this.serializable = serializable; }
+  public WalletService(JdbcTemplate jdbc, SerializableTransactionExecutor serializable, DomainEventLog events, MeterRegistry metrics) {
+    this.jdbc = jdbc;
+    this.serializable = serializable;
+    this.events = events;
+    this.transfersCreated = Counter.builder("wallet.transfers.created").description("Transfers first accepted for processing").register(metrics);
+    this.transfersDeclinedInsufficientFunds = Counter.builder("wallet.transfers.declined.insufficient_funds").description("Transfers declined for insufficient funds").register(metrics);
+    this.idempotentReplays = Counter.builder("wallet.idempotent.replays").description("Idempotency replays served from a prior result").register(metrics);
+  }
 
   public record Wallet(UUID id, String userId, String upiId, long balancePaise) {}
   public record Transfer(UUID id, UUID from, UUID to, long amountPaise, String status, OffsetDateTime createdAt) {}
@@ -69,17 +85,25 @@ public class WalletService {
       requireOwner(walletById(existing.from()), caller);
       if (!existing.from().equals(from) || !existing.to().equals(to) || existing.amountPaise() != amount)
         throw new ApiException(409, "idempotency_key was already used with a different request");
+      countAfterCommit(idempotentReplays);
+      events.record("idempotent_replay_hit", Map.of("transfer_id", existing.id().toString(), "from", fromUpiId, "to", toUpiId));
       return existing;
     }
+    countAfterCommit(transfersCreated);
+    events.record("transfer_created", Map.of("transfer_id", id.toString(), "from", requestedSource.upiId(), "to", requestedDestination.upiId(), "amount_paise", amount));
 
     // Conditional debit is atomic. PostgreSQL locks only the source row being changed,
     // rather than holding explicit locks on both wallets before performing the update.
     int debited = jdbc.update("UPDATE wallets SET balance_paise = balance_paise - ? WHERE id = ? AND balance_paise >= ?", amount, from, amount);
     if (debited == 0) {
       jdbc.update("UPDATE transfers SET status = 'REJECTED', completed_at = CURRENT_TIMESTAMP WHERE id = ?", id);
+      countAfterCommit(transfersDeclinedInsufficientFunds);
+      events.record("transfer_declined_insufficient_funds", Map.of("transfer_id", id.toString(), "from", requestedSource.upiId(), "amount_paise", amount));
       return findById(id);
     }
+    events.record("transfer_debited", Map.of("transfer_id", id.toString(), "from", requestedSource.upiId(), "amount_paise", amount));
     jdbc.update("UPDATE wallets SET balance_paise = balance_paise + ? WHERE id = ?", amount, to);
+    events.record("transfer_credited", Map.of("transfer_id", id.toString(), "to", requestedDestination.upiId(), "amount_paise", amount));
     jdbc.update("UPDATE transfers SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP WHERE id = ?", id);
     return findById(id);
   }
@@ -116,10 +140,14 @@ public class WalletService {
       requireOwner(walletById(existing.walletId()), caller);
       if (!existing.walletId().equals(walletId) || existing.amountPaise() != amount)
         throw new ApiException(409, "idempotency_key was already used with a different request");
+      countAfterCommit(idempotentReplays);
+      events.record("idempotent_replay_hit", Map.of("credit_id", existing.id().toString(), "wallet", requestedWallet.upiId()));
       return existing;
     }
+    events.record("balance_credit_created", Map.of("credit_id", id.toString(), "wallet", requestedWallet.upiId(), "amount_paise", amount));
     jdbc.update("UPDATE wallets SET balance_paise = balance_paise + ? WHERE id = ?", amount, walletId);
     jdbc.update("UPDATE wallet_credits SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP WHERE id = ?", id);
+    events.record("balance_credited", Map.of("credit_id", id.toString(), "wallet", requestedWallet.upiId(), "amount_paise", amount));
     return findCreditById(id);
   }
 
@@ -170,6 +198,12 @@ public class WalletService {
   }
   private void requireOwner(Wallet wallet, String caller) {
     if (!wallet.userId().equals(caller)) throw new ApiException(403, "wallet does not belong to caller");
+  }
+  private void countAfterCommit(Counter counter) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) { counter.increment(); return; }
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override public void afterCommit() { counter.increment(); }
+    });
   }
   private Wallet wallet(ResultSet rs) throws SQLException { return new Wallet(rs.getObject("id", UUID.class), rs.getString("user_id"), rs.getString("upi_id"), rs.getLong("balance_paise")); }
   private Transfer transfer(ResultSet rs) throws SQLException { return new Transfer(rs.getObject("id", UUID.class), rs.getObject("from_wallet_id", UUID.class), rs.getObject("to_wallet_id", UUID.class), rs.getLong("amount_paise"), rs.getString("status"), rs.getObject("created_at", OffsetDateTime.class)); }
