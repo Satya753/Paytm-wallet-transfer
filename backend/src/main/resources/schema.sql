@@ -13,6 +13,13 @@ ALTER TABLE wallets ALTER COLUMN upi_id SET NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS wallets_upi_id_unique ON wallets(upi_id);
 CREATE UNIQUE INDEX IF NOT EXISTS wallets_upi_id_ci_unique ON wallets(lower(upi_id));
 
+-- One active session can claim a wallet. The primary key makes concurrent claims exclusive.
+CREATE TABLE IF NOT EXISTS wallet_sessions (
+  wallet_id UUID PRIMARY KEY REFERENCES wallets(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS transfers (
   id UUID PRIMARY KEY,
   idempotency_key VARCHAR(255) NOT NULL UNIQUE,

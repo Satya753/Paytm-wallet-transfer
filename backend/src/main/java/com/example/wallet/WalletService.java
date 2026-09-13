@@ -37,25 +37,42 @@ public class WalletService {
   }
 
   public record Wallet(UUID id, String userId, String upiId, long balancePaise) {}
+  public record WalletSession(Wallet wallet, UUID sessionId) {}
   public record Transfer(UUID id, UUID from, UUID to, long amountPaise, String status, OffsetDateTime createdAt) {}
   public record Credit(UUID id, UUID walletId, long amountPaise, String status, OffsetDateTime createdAt) {}
   public record WalletTransaction(UUID id, String type, String direction, long amountPaise,
                                   String status, String counterpartyUpiId, OffsetDateTime createdAt) {}
 
   @Transactional
-  public Wallet getOrCreateWallet(String userId) {
+  public WalletSession getOrCreateWallet(String userId) {
     UUID id = UUID.randomUUID();
-    return jdbc.queryForObject("""
+    Wallet wallet = jdbc.queryForObject("""
         INSERT INTO wallets (id, user_id, upi_id) VALUES (?, ?, ?)
         ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id
         RETURNING id, user_id, upi_id, balance_paise
         """, walletMapper, id, userId, userId + "@wallet");
+    UUID sessionId = UUID.randomUUID();
+    var claimed = jdbc.queryForList("""
+        INSERT INTO wallet_sessions (wallet_id, session_id) VALUES (?, ?)
+        ON CONFLICT (wallet_id) DO NOTHING
+        RETURNING session_id
+        """, UUID.class, wallet.id(), sessionId);
+    if (claimed.isEmpty()) throw new ApiException(409, "wallet already logged in");
+    // Do not log the credential itself; the public event feed is intentionally non-sensitive.
+    events.record("wallet_session_created", Map.of("wallet", wallet.upiId()));
+    return new WalletSession(wallet, sessionId);
   }
 
   public Wallet getWallet(String upiId, String caller) {
     Wallet wallet = walletByUpiId(upiId);
     requireOwner(wallet, caller);
     return wallet;
+  }
+
+  @Transactional
+  public void logout(String caller) {
+    jdbc.update("DELETE FROM wallet_sessions WHERE wallet_id = (SELECT id FROM wallets WHERE user_id = ?)", caller);
+    events.record("wallet_session_released", Map.of("user", caller));
   }
 
   public Transfer transfer(String fromUpiId, String toUpiId, long amount, String key, String caller) {
@@ -197,7 +214,7 @@ public class WalletService {
     catch (EmptyResultDataAccessException e) { throw new ApiException(404, "credit not found"); }
   }
   private void requireOwner(Wallet wallet, String caller) {
-    if (!wallet.userId().equals(caller)) throw new ApiException(403, "wallet does not belong to caller");
+    if (!wallet.userId().equals(caller)) throw new ApiException(409, "wallet already logged in");
   }
   private void countAfterCommit(Counter counter) {
     if (!TransactionSynchronizationManager.isSynchronizationActive()) { counter.increment(); return; }

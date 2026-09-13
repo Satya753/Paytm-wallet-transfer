@@ -68,7 +68,7 @@ curl localhost:8080/wallets/alice%40wallet/transactions \
   -H 'Authorization: Bearer alice-token'
 ```
 
-`POST /wallets` is get-or-create for the authenticated user. Wallet, credit, and history reads only permit the wallet owner. Transfers use an atomic conditional debit and credit in one SQL transaction, and persist the client idempotency key. Insufficient funds create a `REJECTED` transfer without changing balances.
+`POST /wallets` creates or retrieves the authenticated user's wallet and atomically claims its one active session. It returns `409 wallet already logged in` while that session exists, including concurrent callers attempting the same wallet. The response includes a unique `session_id`; `POST /wallets/session/logout` releases it. Wallet, credit, and history reads only permit the wallet owner. Transfers use an atomic conditional debit and credit in one SQL transaction, and persist the client idempotency key. Insufficient funds create a `REJECTED` transfer without changing balances.
 
 Balance credits and transfers run at PostgreSQL `SERIALIZABLE` isolation. The service retries transient serialization or deadlock conflicts up to four times; if the wallet remains busy it returns `503`, and callers should retry with the **same** idempotency key.
 
@@ -116,10 +116,10 @@ The generated UPI IDs follow `seed100-user-1@wallet`, `seed1000-user-1@wallet`, 
 
 ## Concurrent wallet check
 
-After the API is running, verify that concurrent get-or-create requests for one bearer-token user all return exactly one wallet:
+After the API is running, verify that concurrent get-or-create requests permit exactly one active login:
 
 ```sh
 ./scripts/concurrent-wallet-check.sh alice-token 100
 ```
 
-The optional final argument is the API base URL, for example `http://localhost:8080`.
+The script releases an existing session, then asserts one `201` wallet response and `409 wallet already logged in` for every other concurrent request. The optional final argument is the API base URL, for example `http://localhost:8080`.

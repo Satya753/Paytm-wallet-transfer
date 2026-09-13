@@ -22,6 +22,13 @@ public class WalletController {
     return WalletResponse.from(service.getOrCreateWallet(user(request)));
   }
 
+  /** Backend-only session reset, useful for test runs and an explicit logout flow. */
+  @PostMapping("/wallets/session/logout")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void logout(HttpServletRequest request) {
+    service.logout(user(request));
+  }
+
   @GetMapping("/wallets/{id}")
   public WalletResponse get(@PathVariable String id, HttpServletRequest request) {
     return WalletResponse.from(service.getWallet(id, user(request)));
@@ -63,8 +70,11 @@ public class WalletController {
     return body.get("amount_paise").longValue();
   }
 
-  public record WalletResponse(String upi_id, long balance_paise) {
-    static WalletResponse from(WalletService.Wallet w) { return new WalletResponse(w.upiId(), w.balancePaise()); }
+  public record WalletResponse(String upi_id, long balance_paise, UUID session_id) {
+    static WalletResponse from(WalletService.WalletSession session) {
+      return new WalletResponse(session.wallet().upiId(), session.wallet().balancePaise(), session.sessionId());
+    }
+    static WalletResponse from(WalletService.Wallet w) { return new WalletResponse(w.upiId(), w.balancePaise(), null); }
   }
   public record TransferResponse(UUID id, String from, String to, long amount_paise, String status, Object created_at) {
     static TransferResponse from(WalletService.Transfer t, WalletService service) { return new TransferResponse(t.id(), service.upiId(t.from()), service.upiId(t.to()), t.amountPaise(), t.status(), t.createdAt()); }
